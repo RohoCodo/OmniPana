@@ -15,11 +15,12 @@ export async function GET() {
     const user = await getSessionUser();
     if (!user) return NextResponse.json({ error: "Please sign in." }, { status: 401 });
 
-    const location = await db.location.findFirst({
+    const locations = await db.location.findMany({
       where: { organizationId: user.organizationId },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       select: { id: true, name: true, address: true, varianceThreshold: true },
     });
+    const location = locations[0] ?? null;
     if (!location) return NextResponse.json({ error: "No location found for this workspace." }, { status: 400 });
 
     const products = await withLocationScope(user.id, () => inventoryService.getInventory(location.id));
@@ -67,6 +68,7 @@ export async function GET() {
     const data: WorkspaceData = {
       user: { name: user.name, email: user.email },
       organization: { name: user.organization.name },
+      locations: serialize(locations),
       location: serialize(location),
       products: products.map(product => ({
         ...product,

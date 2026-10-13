@@ -35,6 +35,23 @@ enum BottleStatus {
   EMPTY
   DISCARDED
 }
+enum CountSessionStatus {
+  DRAFT
+  IN_PROGRESS
+  SUBMITTED
+  REVIEWED
+  FINALIZED
+  VOIDED
+}
+enum CountMethod {
+  MANUAL
+  PHOTO_ASSISTED
+  IMPORTED
+}
+enum UserRole {
+  MANAGER
+  STAFF
+}
 model Organization {
   id String @id @default(cuid())
   name String
@@ -50,6 +67,7 @@ model User {
   email String @unique
   name String
   passwordHash String
+  role UserRole @default(MANAGER)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   sessions Session[]
@@ -79,6 +97,7 @@ model Location {
   sales Sale[]
   photos Photo[]
   physicalCounts PhysicalCount[]
+  countSessions CountSession[]
   invoices Invoice[]
   aliases ProductAlias[]
 }
@@ -101,6 +120,8 @@ model Product {
   transactions InventoryTransaction[]
   ingredients RecipeIngredient[]
   physicalCounts PhysicalCount[]
+  countSessionLines CountSessionLine[]
+  countSessionCorrections CountSessionCorrection[]
   aliases ProductAlias[]
   @@unique([locationId, normalizedName, bottleSizeMl])
 }
@@ -216,6 +237,7 @@ model Photo {
   createdBy String
   confirmedAt DateTime?
   physicalCounts PhysicalCount[]
+  countSessionLines CountSessionLine[]
 }
 model PhysicalCount {
   id String @id @default(cuid())
@@ -225,6 +247,8 @@ model PhysicalCount {
   product Product @relation(fields: [productId], references: [id])
   photoId String?
   photo Photo? @relation(fields: [photoId], references: [id])
+  countSessionId String?
+  countSession CountSession? @relation(fields: [countSessionId], references: [id])
   quantityBottles Decimal @db.Decimal(18, 6)
   quantityMl Decimal @db.Decimal(18, 6)
   confidence Decimal @db.Decimal(8, 4)
@@ -268,4 +292,65 @@ model ProductAlias {
   productId String
   product Product @relation(fields: [productId], references: [id])
   @@unique([locationId, normalizedName, bottleSizeMl])
+}
+
+model CountSession {
+  id String @id @default(cuid())
+  locationId String
+  location Location @relation(fields: [locationId], references: [id])
+  status CountSessionStatus @default(DRAFT)
+  method CountMethod @default(MANUAL)
+  startedAt DateTime @default(now())
+  endedAt DateTime?
+  countedAt DateTime @default(now())
+  notes String @default("")
+  createdBy String
+  reviewedBy String?
+  reviewedAt DateTime?
+  finalizedBy String?
+  finalizedAt DateTime?
+  voidedBy String?
+  voidedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  lines CountSessionLine[]
+  corrections CountSessionCorrection[]
+  physicalCounts PhysicalCount[]
+  @@index([locationId, countedAt])
+  @@index([locationId, status, updatedAt])
+}
+
+model CountSessionLine {
+  id String @id @default(cuid())
+  sessionId String
+  session CountSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  productId String
+  product Product @relation(fields: [productId], references: [id])
+  photoId String?
+  photo Photo? @relation(fields: [photoId], references: [id])
+  quantityMl Decimal @db.Decimal(18, 6)
+  quantityBottles Decimal @db.Decimal(18, 6)
+  confidence Decimal @db.Decimal(8, 4)
+  notes String @default("")
+  createdBy String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([sessionId, productId])
+  @@index([productId, updatedAt])
+}
+
+model CountSessionCorrection {
+  id String @id @default(cuid())
+  sessionId String
+  session CountSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  productId String
+  product Product @relation(fields: [productId], references: [id])
+  beforeQuantityMl Decimal @db.Decimal(18, 6)
+  beforeQuantityBottles Decimal @db.Decimal(18, 6)
+  afterQuantityMl Decimal @db.Decimal(18, 6)
+  afterQuantityBottles Decimal @db.Decimal(18, 6)
+  reason String
+  correctedBy String
+  correctedAt DateTime @default(now())
+  @@index([sessionId, correctedAt])
 }

@@ -12,6 +12,28 @@ export function VarianceView() {
   const [category, setCategory] = useState("");
   const [status, setStatus] = useState("");
   const [minAbsBottles, setMinAbsBottles] = useState("0");
+  const [reportStart, setReportStart] = useState(() => new Date(Date.now() - 29 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10));
+  const [reportEnd, setReportEnd] = useState(() => new Date().toISOString().slice(0, 10));
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
+  const [reportSummary, setReportSummary] = useState<{
+    totals: {
+      rowsWithPhysicalCount: number;
+      rowsWithoutPhysicalCount: number;
+      openingValue: string | null;
+      expectedEndingValue: string | null;
+      physicalEndingValue: string | null;
+      varianceValue: string | null;
+    };
+    disclosures: {
+      unreviewedInvoices: number;
+      unmappedSalesRows: number;
+      unmappedSalesQuantity: string;
+      missingCostRows: number;
+      lowConfidenceCountRows: number;
+      lowConfidenceThreshold: string;
+    };
+  } | null>(null);
 
   const categories = useMemo(() => Array.from(new Set(data.products.map(product => product.category))).sort(), [data.products]);
 
@@ -31,6 +53,30 @@ export function VarianceView() {
   }, [category, data.products, minAbsBottles, query, status]);
 
   const reviewCount = rows.filter(row => row.status === "REVIEW").length;
+
+  const reportJsonHref = `/api/reports/monthly?start=${encodeURIComponent(reportStart)}&end=${encodeURIComponent(reportEnd)}&locationId=${encodeURIComponent(data.location.id)}&format=json`;
+  const reportCsvHref = `/api/reports/monthly?start=${encodeURIComponent(reportStart)}&end=${encodeURIComponent(reportEnd)}&locationId=${encodeURIComponent(data.location.id)}&format=csv`;
+
+  async function loadReportSummary() {
+    setReportLoading(true);
+    setReportError(null);
+    try {
+      const response = await fetch(reportJsonHref, { cache: "no-store" });
+      if (!response.ok) {
+        throw new Error(`Failed to load report (${response.status})`);
+      }
+      const payload = await response.json();
+      setReportSummary({
+        totals: payload.totals,
+        disclosures: payload.disclosures,
+      });
+    } catch (error) {
+      setReportSummary(null);
+      setReportError(error instanceof Error ? error.message : "Failed to load report summary");
+    } finally {
+      setReportLoading(false);
+    }
+  }
 
   return (
     <>
@@ -72,6 +118,57 @@ export function VarianceView() {
           <Field label="Minimum absolute variance (bottles)">
             <input type="number" step="0.1" min="0" value={minAbsBottles} onChange={event => setMinAbsBottles(event.target.value)} />
           </Field>
+        </div>
+      </Panel>
+
+      <Panel title="Monthly reconciliation export" subtitle="Generate a period report with opening, movement, expected ending, physical ending, and variance values.">
+        <div className="filter-bar">
+          <Field label="Start date"><input type="date" value={reportStart} onChange={event => setReportStart(event.target.value)} /></Field>
+          <Field label="End date"><input type="date" value={reportEnd} onChange={event => setReportEnd(event.target.value)} /></Field>
+        </div>
+        <div className="panel-body">
+          <div className="inline-actions">
+            <button type="button" className="button secondary" onClick={loadReportSummary} disabled={reportLoading}>
+              {reportLoading ? "Loading report…" : "Load report summary"}
+            </button>
+            <a className="button secondary" href={reportJsonHref} target="_blank" rel="noreferrer">Open JSON report</a>
+            <a className="button" href={reportCsvHref}>Download CSV report</a>
+          </div>
+          {reportError ? <p className="muted small">{reportError}</p> : null}
+          {reportSummary ? (
+            <div className="stats-grid three">
+              <div className="stat">
+                <div className="stat-label">Coverage</div>
+                <strong>{reportSummary.totals.rowsWithPhysicalCount}/{reportSummary.totals.rowsWithPhysicalCount + reportSummary.totals.rowsWithoutPhysicalCount}</strong>
+                <span>Rows with physical counts</span>
+              </div>
+              <div className="stat">
+                <div className="stat-label">Unreviewed invoices</div>
+                <strong>{reportSummary.disclosures.unreviewedInvoices}</strong>
+                <span>Invoices in range not approved</span>
+              </div>
+              <div className="stat">
+                <div className="stat-label">Unmapped sales rows</div>
+                <strong>{reportSummary.disclosures.unmappedSalesRows}</strong>
+                <span>{reportSummary.disclosures.unmappedSalesQuantity} quantity not mapped to recipes</span>
+              </div>
+              <div className="stat">
+                <div className="stat-label">Missing product cost rows</div>
+                <strong>{reportSummary.disclosures.missingCostRows}</strong>
+                <span>Rows excluded from value totals</span>
+              </div>
+              <div className="stat">
+                <div className="stat-label">Low confidence counts</div>
+                <strong>{reportSummary.disclosures.lowConfidenceCountRows}</strong>
+                <span>Confidence below {reportSummary.disclosures.lowConfidenceThreshold}</span>
+              </div>
+              <div className="stat">
+                <div className="stat-label">Variance value total</div>
+                <strong>{reportSummary.totals.varianceValue == null ? "N/A" : money(reportSummary.totals.varianceValue)}</strong>
+                <span>Null when any row lacks cost basis</span>
+              </div>
+            </div>
+          ) : null}
         </div>
       </Panel>
 

@@ -3,8 +3,15 @@ import { db } from "../db";
 import { decimal } from "./math";
 import { mlToBottles } from "./units";
 
-const ADDITIVE_TYPES = new Set(["INITIAL_COUNT", "RECEIVING", "TRANSFER_IN"] as const);
-const SUBTRACTIVE_TYPES = new Set(["SALE_CONSUMPTION", "WASTE", "TRANSFER_OUT"] as const);
+const ADDITIVE_TYPES = new Set<InventoryTransaction["type"]>(["INITIAL_COUNT", "RECEIVING", "TRANSFER_IN"]);
+const SUBTRACTIVE_TYPES = new Set<InventoryTransaction["type"]>(["SALE_CONSUMPTION", "WASTE", "TRANSFER_OUT"]);
+
+function quantityAsDecimalString(quantityMl: Pick<InventoryTransaction, "quantityMl">["quantityMl"]): string {
+  if (quantityMl && typeof quantityMl === "object" && "toFixed" in quantityMl && typeof quantityMl.toFixed === "function") {
+    return quantityMl.toFixed();
+  }
+  return String(quantityMl);
+}
 
 export interface LedgerComputationResult {
   theoreticalMl: string;
@@ -12,7 +19,7 @@ export interface LedgerComputationResult {
 
 export function calculateInventoryFromLedger(transactions: Pick<InventoryTransaction, "type" | "quantityMl">[]): LedgerComputationResult {
   const total = transactions.reduce((sum, transaction) => {
-    const amount = decimal(transaction.quantityMl.toFixed());
+    const amount = decimal(quantityAsDecimalString(transaction.quantityMl));
 
     if (ADDITIVE_TYPES.has(transaction.type)) {
       return sum.add(amount.abs());

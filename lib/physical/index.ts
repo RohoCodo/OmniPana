@@ -59,8 +59,22 @@ export async function confirmPhoto(locationId: string, userId: string, photoId: 
         confidence: previous && previous.confidence.lt(confidence) ? previous.confidence : confidence });
     }
     const confirmedAt = new Date();
+    const session = await tx.countSession.create({ data: {
+      locationId,
+      status: "FINALIZED",
+      method: "PHOTO_ASSISTED",
+      startedAt: countedAt,
+      endedAt: confirmedAt,
+      countedAt,
+      notes: "Auto-created from confirmed photo-assisted count",
+      createdBy: userId,
+      reviewedBy: userId,
+      reviewedAt: confirmedAt,
+      finalizedBy: userId,
+      finalizedAt: confirmedAt,
+    } });
     const reviewedResult = { bottles: input.bottles.map(row => row.ignore === true ? { ignore: true, productName: reviewName.parse(row.productName ?? "") } : bottleReviewSchema.parse(row)),
-      countedAt: countedAt.toISOString(), countSemantics: "COMPLETE_PER_PRODUCT", warning: PHOTO_COUNT_WARNING };
+      countedAt: countedAt.toISOString(), countSemantics: "COMPLETE_PER_PRODUCT", warning: PHOTO_COUNT_WARNING, countSessionId: session.id };
     const claimed = await tx.photo.updateMany({ where: { id: photoId, locationId, confirmedAt: null, status: { not: "PROCESSING" } },
       data: { confirmedAt, status: "COMPLETED", reviewedResult, error: null } });
     if (claimed.count !== 1) throw new Error("Photo confirmation changed concurrently; retry");
@@ -68,8 +82,18 @@ export async function confirmPhoto(locationId: string, userId: string, photoId: 
     for (const [productId, group] of groups) {
       const quantityMl = ledgerQuantity(group.ml);
       const quantityBottles = ledgerQuantity(mlToBottles(group.ml, group.product.bottleSizeMl.toFixed()));
+      await tx.countSessionLine.create({ data: {
+        sessionId: session.id,
+        productId,
+        photoId,
+        quantityMl,
+        quantityBottles,
+        confidence: stored(group.confidence, 8, 4),
+        notes: "Confirmed from reviewed photo detections",
+        createdBy: userId,
+      } });
       const count = await tx.physicalCount.create({ data: { locationId, photoId, productId, quantityMl, quantityBottles,
-        confidence: stored(group.confidence, 8, 4), countedAt, confirmedAt, confirmedBy: userId } });
+        countSessionId: session.id, confidence: stored(group.confidence, 8, 4), countedAt, confirmedAt, confirmedBy: userId } });
       counts.push(count);
       await tx.inventoryTransaction.create({ data: { locationId, productId, type: "PHYSICAL_COUNT", quantityMl, quantityBottles,
         unitCost: group.product.unitCost, source: "AI_PHOTO", sourceId: photoId, createdBy: userId, createdAt: countedAt,

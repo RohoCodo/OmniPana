@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
+import type { UserRole } from "@prisma/client";
 import { db } from "../db";
 import { authorizeLocation } from "../inventory/shared";
 
@@ -84,6 +85,7 @@ export interface AuthenticatedUser {
   id: string;
   email: string;
   name: string;
+  role: UserRole;
   organizationId: string;
   organization: { id: string; name: string };
 }
@@ -100,6 +102,7 @@ export async function getSessionUser(): Promise<AuthenticatedUser | null> {
           id: true,
           email: true,
           name: true,
+          role: true,
           organizationId: true,
           organization: { select: { id: true, name: true } },
         },
@@ -124,6 +127,15 @@ export async function requireSessionUser(): Promise<AuthenticatedUser> {
 export async function requireAuthorizedLocation(locationId: string, userId: string) {
   if (!locationId || !userId) throw new Error("Authentication required");
   return authorizeLocation(db, locationId, userId);
+}
+
+export async function requireLocationRole(locationId: string, userId: string, allowedRoles: UserRole[]) {
+  const location = await requireAuthorizedLocation(locationId, userId);
+  const user = await db.user.findUnique({ where: { id: userId }, select: { role: true } });
+  if (!user || !allowedRoles.includes(user.role)) {
+    throw new Error(`Permission denied: requires one of [${allowedRoles.join(", ")}]`);
+  }
+  return { location, role: user.role };
 }
 
 export { normalizeEmail };

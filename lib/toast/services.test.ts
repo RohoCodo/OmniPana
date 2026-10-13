@@ -13,6 +13,8 @@ let db: PrismaClient;
 let importToast: typeof import("./index").importToast;
 let confirmPhoto: typeof import("../physical").confirmPhoto;
 let confirmInvoice: typeof import("../receiving").confirmInvoice;
+let recordTransfer: typeof import("../inventory").inventoryService.recordTransfer;
+let recordAdjustment: typeof import("../inventory").inventoryService.recordAdjustment;
 
 beforeAll(async () => {
   pg = await PGlite.create();
@@ -26,6 +28,7 @@ beforeAll(async () => {
   ({ importToast } = await import("./index"));
   ({ confirmPhoto } = await import("../physical"));
   ({ confirmInvoice } = await import("../receiving"));
+  ({ inventoryService: { recordTransfer, recordAdjustment } } = await import("../inventory"));
 });
 
 afterAll(async () => {
@@ -40,9 +43,13 @@ beforeEach(async () => {
   await db.organization.create({ data: { id: "org", name: "Test" } });
   await db.organization.create({ data: { id: "foreign-org", name: "Other" } });
   await db.user.create({ data: { id: "user", organizationId: "org", name: "Test", email: "test@test.invalid", passwordHash: "unused" } });
+  await db.user.create({ data: { id: "staff", organizationId: "org", name: "Staff", email: "staff@test.invalid", passwordHash: "unused", role: "STAFF" } });
   await db.location.create({ data: { id: "loc", organizationId: "org", name: "Test" } });
+  await db.location.create({ data: { id: "bar", organizationId: "org", name: "Bar" } });
   await db.location.create({ data: { id: "foreign", organizationId: "foreign-org", name: "Other" } });
   await db.product.create({ data: { id: "gin", locationId: "loc", name: "Gin", normalizedName: "gin", category: "Gin", brand: "Test",
+    bottleSizeMl: "750", bottleSizeOz: "25.3605", unitCost: "30" } });
+  await db.product.create({ data: { id: "bar-gin", locationId: "bar", name: "Gin", normalizedName: "gin", category: "Gin", brand: "Test",
     bottleSizeMl: "750", bottleSizeOz: "25.3605", unitCost: "30" } });
   await db.product.create({ data: { id: "foreign-gin", locationId: "foreign", name: "Other Gin", normalizedName: "other gin", category: "Gin", brand: "Other",
     bottleSizeMl: "750", bottleSizeOz: "25.3605", unitCost: "30" } });
@@ -120,6 +127,12 @@ describe("reviewed complete photo counts", () => {
     expect(first.counts).toHaveLength(1);
     expect(first.counts[0]).toMatchObject({ quantityMl: "1125", quantityBottles: "1.5", confidence: "0.8", countedAt: "2026-01-01T12:00:00.000Z" });
     expect(first.warning).toContain("not summed");
+    const linkedCount = await db.physicalCount.findFirstOrThrow({ where: { photoId: "photo", productId: "gin" } });
+    expect(linkedCount.countSessionId).toBeTruthy();
+    const session = await db.countSession.findUniqueOrThrow({ where: { id: linkedCount.countSessionId ?? "" } });
+    expect(session.status).toBe("FINALIZED");
+    expect(session.method).toBe("PHOTO_ASSISTED");
+    expect(await db.countSessionLine.count({ where: { sessionId: session.id, productId: "gin" } })).toBe(1);
     expect((await confirmPhoto("loc", "user", "photo", { bottles: [bottle] })).alreadyConfirmed).toBe(true);
     expect(await db.inventoryTransaction.count()).toBe(1);
     expect((await db.photo.findUniqueOrThrow({ where: { id: "photo" } })).result).toEqual({ bottles: [{ original: true }] });
@@ -171,6 +184,95 @@ describe("reviewed invoice receiving", () => {
     await expect(confirmInvoice("loc", "user", "invoice", { ...received, lineItems: [{ ...received.lineItems[0], bottleSizeMl: "750" }] })).rejects.toThrow("Alias");
     expect(await db.inventoryTransaction.count()).toBe(0);
     expect((await db.invoice.findUniqueOrThrow({ where: { id: "invoice" } })).confirmedAt).toBeNull();
+  });
+
+  it("requires manager role to approve reviewed invoices", async () => {
+    await invoice();
+    await expect(confirmInvoice("loc", "staff", "invoice", received)).rejects.toThrow("Permission denied");
+    expect(await db.inventoryTransaction.count()).toBe(0);
+    expect((await db.invoice.findUniqueOrThrow({ where: { id: "invoice" } })).confirmedAt).toBeNull();
+  });
+});
+
+describe("location transfer posting", () => {
+  it("posts linked transfer out and transfer in exactly once", async () => {
+    await db.inventoryTransaction.create({ data: {
+      locationId: "loc", productId: "gin", type: "INITIAL_COUNT", quantityMl: "7500", quantityBottles: "10", unitCost: "30", source: "USER", createdBy: "user",
+    } });
+
+    const first = await recordTransfer("user", {
+      sourceLocationId: "loc",
+      destinationLocationId: "bar",
+      sourceProductId: "gin",
+      quantityMl: "2250",
+      notes: "Move stock to front bar",
+    });
+    expect(first.alreadyRecorded).toBe(false);
+
+    const second = await recordTransfer("user", {
+      sourceLocationId: "loc",
+      destinationLocationId: "bar",
+      sourceProductId: "gin",
+      quantityMl: "2250",
+      notes: "Move stock to front bar",
+    });
+    expect(second.alreadyRecorded).toBe(true);
+    expect(second.transferId).toBe(first.transferId);
+
+    const sourceRows = await db.inventoryTransaction.findMany({ where: { locationId: "loc", productId: "gin" }, orderBy: { createdAt: "asc" } });
+    const destRows = await db.inventoryTransaction.findMany({ where: { locationId: "bar", productId: "bar-gin" }, orderBy: { createdAt: "asc" } });
+
+    expect(sourceRows).toHaveLength(2);
+    expect(destRows).toHaveLength(1);
+    expect(sourceRows[1]).toMatchObject({ type: "TRANSFER_OUT" });
+    expect(sourceRows[1].quantityMl.toFixed()).toBe("-2250");
+    expect(destRows[0]).toMatchObject({ type: "TRANSFER_IN", sourceId: first.transferId });
+    expect(destRows[0].quantityMl.toFixed()).toBe("2250");
+  });
+
+  it("rejects transfers when source inventory is insufficient", async () => {
+    await db.inventoryTransaction.create({ data: {
+      locationId: "loc", productId: "gin", type: "INITIAL_COUNT", quantityMl: "750", quantityBottles: "1", unitCost: "30", source: "USER", createdBy: "user",
+    } });
+
+    await expect(recordTransfer("user", {
+      sourceLocationId: "loc",
+      destinationLocationId: "bar",
+      sourceProductId: "gin",
+      quantityMl: "1500",
+      notes: "Too large",
+    })).rejects.toThrow("Insufficient source inventory");
+
+    expect(await db.inventoryTransaction.count({ where: { type: { in: ["TRANSFER_OUT", "TRANSFER_IN"] } } })).toBe(0);
+  });
+
+  it("requires manager role for transfers", async () => {
+    await db.inventoryTransaction.create({ data: {
+      locationId: "loc", productId: "gin", type: "INITIAL_COUNT", quantityMl: "1500", quantityBottles: "2", unitCost: "30", source: "USER", createdBy: "user",
+    } });
+
+    await expect(recordTransfer("staff", {
+      sourceLocationId: "loc",
+      destinationLocationId: "bar",
+      sourceProductId: "gin",
+      quantityMl: "750",
+      notes: "Staff should not transfer",
+    })).rejects.toThrow("Permission denied");
+
+    expect(await db.inventoryTransaction.count({ where: { type: { in: ["TRANSFER_OUT", "TRANSFER_IN"] } } })).toBe(0);
+  });
+});
+
+describe("sensitive inventory adjustments", () => {
+  it("requires manager role for manual or waste adjustments", async () => {
+    await expect(recordAdjustment("loc", "staff", {
+      productId: "gin",
+      type: "WASTE",
+      quantityMl: "150",
+      notes: "Breakage",
+    })).rejects.toThrow("Permission denied");
+
+    expect(await db.inventoryTransaction.count({ where: { type: { in: ["WASTE", "MANUAL_ADJUSTMENT"] } } })).toBe(0);
   });
 });
 

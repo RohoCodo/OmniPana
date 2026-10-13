@@ -29,6 +29,15 @@ const adjustmentSchema = z.object({
   notes: z.string().trim().min(1).max(1000),
 });
 
+const transferSchema = z.object({
+  sourceLocationId: z.string().trim().min(1),
+  destinationLocationId: z.string().trim().min(1),
+  sourceProductId: z.string().trim().min(1),
+  destinationProductId: z.string().trim().min(1).optional(),
+  quantityMl: z.string().trim().min(1),
+  notes: z.string().trim().min(1).max(1000),
+});
+
 const recipeSchema = z.object({
   menuItemId: z.string().trim().min(1),
   name: z.string().trim().min(1).max(200).optional(),
@@ -88,6 +97,10 @@ export async function POST(request: Request) {
       if (action === "adjustment") {
         const input = adjustmentSchema.parse(payload);
         return inventoryService.recordAdjustment(locationId, user.id, input);
+      }
+      if (action === "transfer") {
+        const input = transferSchema.parse(payload);
+        return inventoryService.recordTransfer(user.id, input);
       }
       if (action === "recipe:save") {
         const input = recipeSchema.parse(payload);

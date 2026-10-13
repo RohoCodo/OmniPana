@@ -20,6 +20,7 @@ export interface Invoice extends UploadRecord<InvoiceResult> { vendor?: string |
 export interface PhysicalCount { id: string; productId: string; quantityBottles: DecimalValue; quantityMl: DecimalValue; countedAt: string; confidence: DecimalValue; varianceStatus?: string; varianceReviewedAt?: string | null }
 export interface WorkspaceData {
   user: { name: string; email: string }; organization: { name: string };
+  locations: { id: string; name: string; address: string; varianceThreshold: DecimalValue }[];
   location: { id: string; name: string; address: string; varianceThreshold: DecimalValue };
   products: Product[]; menuItems: MenuItem[]; transactions: Transaction[]; photos: Photo[]; invoices: Invoice[]; physicalCounts: PhysicalCount[];
   sales: { id: string; quantity: DecimalValue; soldAt: string; processedAt: string | null; menuItem: { name: string } }[];

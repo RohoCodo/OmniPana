@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
-import { requireAuthorizedLocation } from "../auth";
+import { requireAuthorizedLocation, requireLocationRole } from "../auth";
 import { extractInvoice } from "../ai";
 import { db } from "../db";
 import { decimal, ledgerQuantity, mlToBottles, positive, stored } from "../inventory/math";
@@ -24,7 +24,7 @@ function invoiceIdentity(value: string): string {
 }
 
 export async function confirmInvoice(locationId: string, userId: string, invoiceId: string, input: ConfirmInvoiceInput) {
-  await requireAuthorizedLocation(locationId, userId);
+  await requireLocationRole(locationId, userId, ["MANAGER"]);
   return transaction(async tx => {
     await authorizeLocation(tx, locationId, userId);
     const invoice = await tx.invoice.findFirst({ where: { id: invoiceId, locationId } });
